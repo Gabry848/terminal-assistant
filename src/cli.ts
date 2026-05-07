@@ -312,6 +312,8 @@ async function streamAndCollect(response: Response, raw: boolean): Promise<strin
   const decoder = new TextDecoder();
   let buffer = "";
   let fullContent = "";
+  let markdownBuffer = "";
+  let inCodeBlock = false;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -329,15 +331,62 @@ async function streamAndCollect(response: Response, raw: boolean): Promise<strin
       if (delta) {
         fullContent += delta;
         if (!raw) {
-          process.stdout.write(delta);
+          markdownBuffer += delta;
+
+          let newlineIndex = markdownBuffer.indexOf("\n");
+          while (newlineIndex !== -1) {
+            const rawLine = markdownBuffer.slice(0, newlineIndex).replace(/\r$/, "");
+            markdownBuffer = markdownBuffer.slice(newlineIndex + 1);
+
+            const renderedLine = renderMarkdownStreamLine(rawLine, inCodeBlock);
+            inCodeBlock = renderedLine.inCodeBlock;
+            if (renderedLine.line !== null) {
+              process.stdout.write(`${renderedLine.line}\n`);
+            }
+
+            newlineIndex = markdownBuffer.indexOf("\n");
+          }
         }
       }
     }
   }
-  if (!raw) {
-    process.stdout.write("\n");
+
+  if (!raw && markdownBuffer.length > 0) {
+    const renderedLine = renderMarkdownStreamLine(markdownBuffer.replace(/\r$/, ""), inCodeBlock);
+    if (renderedLine.line !== null) {
+      process.stdout.write(`${renderedLine.line}\n`);
+    }
   }
+
   return fullContent;
+}
+
+function renderMarkdownStreamLine(rawLine: string, inCodeBlock: boolean): { line: string | null; inCodeBlock: boolean } {
+  const fence = rawLine.trim().match(/^\s*```/);
+  if (fence) {
+    return { line: null, inCodeBlock: !inCodeBlock };
+  }
+
+  if (inCodeBlock) {
+    return { line: `    ${ansi.yellow(rawLine)}`, inCodeBlock };
+  }
+
+  const heading = rawLine.match(/^\s{0,3}#{1,6}\s+(.+)$/);
+  if (heading) {
+    return { line: ansi.bold(renderInlineMarkdown(heading[1])), inCodeBlock };
+  }
+
+  const unordered = rawLine.match(/^(\s*)[-*+]\s+(.+)$/);
+  if (unordered) {
+    return { line: `${unordered[1]}* ${renderInlineMarkdown(unordered[2])}`, inCodeBlock };
+  }
+
+  const ordered = rawLine.match(/^(\s*)\d+[.)]\s+(.+)$/);
+  if (ordered) {
+    return { line: `${ordered[1]}1. ${renderInlineMarkdown(ordered[2])}`, inCodeBlock };
+  }
+
+  return { line: renderInlineMarkdown(rawLine), inCodeBlock };
 }
 
 export function renderTerminalMarkdown(content: string): string {
@@ -436,7 +485,7 @@ async function formatApiError(response: Response): Promise<string> {
 
 function printHelp(): void {
   const title = ansi.bold(ansi.yellow("Terminal Assistant - Il tuo aiutante AI nel terminale"));
-  const desc = "Un CLI tool che usa l'AI per generare e comprendere comandi, risolvere errori e assisterti nel terminale, supportando lo streaming e la documentazione del contesto di sistema.";
+  const desc = "Un CLI tool che usa l'AI er generare e comprendere comandi, risolvere errori e assisterti nel terminale, supportando lo streaming e la documentazione del contesto di sistema.";
 
   console.log(`
 ${title}
