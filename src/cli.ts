@@ -56,6 +56,11 @@ export async function main(argv: string[]): Promise<void> {
     options.query = options.query ? `${stdinContent}\n\n${options.query}` : stdinContent;
   }
 
+  if (options.query.trim().toLowerCase() === "help") {
+    printHelp();
+    return;
+  }
+
   if (!options.query && !options.followUp) {
     printHelp();
     return;
@@ -430,17 +435,29 @@ async function formatApiError(response: Response): Promise<string> {
 }
 
 function printHelp(): void {
-  console.log(`Uso:
-  ? come trovo i file piu grandi in questa cartella
-  ? --model openai/gpt-5.2 come faccio un revert dell'ultimo commit
-  npm run build 2>&1 | ? analizza questo log d'errore
+  const title = ansi.bold(ansi.yellow("Terminal Assistant - Il tuo aiutante AI nel terminale"));
+  const desc = "Un CLI tool che usa l'AI per generare e comprendere comandi, risolvere errori e assisterti nel terminale, supportando lo streaming e la documentazione del contesto di sistema.";
 
-Config:
+  console.log(`
+${title}
+${desc}
+
+${ansi.bold("Come Funziona:")}
+  L'assistente ti fornisce risposte immediate, analizza log o errori tramite la pipe (stdin) e può
+  tenere memoria delle conversazioni precedenti per darti contesto nei comandi successivi.
+
+${ansi.bold("Uso:")}
+  ? come trovo i file piu grandi in questa cartella
+  ? --model openai/gpt-4o come faccio un revert dell'ultimo commit
+  npm run build 2>&1 | ? analizza questo log d'errore
+  ? follow-up "e invece per i file piu piccoli?"
+
+${ansi.bold("Config:")}
   OPENROUTER_API_KEY   obbligatoria
   OPENROUTER_MODEL     opzionale, default: ${DEFAULT_MODEL}
 
-Opzioni:
-  -m, --model <id>     scegli un modello OpenRouter
+${ansi.bold("Opzioni:")}
+  -m, --model <id>     scegli un modello OpenRouter overriding the default
   -c, --copy           copia il codice suggerito negli appunti
   -f, --follow-up      continua la conversazione precedente
   --raw                stampa solo l'ultimo comando crudo (es. per pipe/eval)
