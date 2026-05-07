@@ -1,34 +1,34 @@
 # terminal-assistant
 
-CLI TypeScript che usa OpenRouter per rispondere a domande pratiche sul terminale.
+A TypeScript CLI that uses OpenRouter to answer practical terminal questions.
 
 ## Setup
 
-1. Crea `.env` partendo da `.env.example` e inserisci `OPENROUTER_API_KEY`.
-2. Installa le dipendenze:
+1. Create `.env` from `.env.example` and insert your `OPENROUTER_API_KEY`.
+2. Install dependencies:
 
 ```sh
 pnpm install
 ```
 
-3. Compila e collega il comando:
+3. Build and link the command:
 
 ```sh
 pnpm run link:global
 ```
 
-4. Aggiungi l'alias al tuo shell, per esempio in `~/.zshrc`:
+4. Add the alias to your shell, for example in `~/.zshrc`:
 
 ```sh
 alias '?'='terminal-assistant'
 ```
 
-## Uso
+## Usage
 
 ```sh
-? come trovo i file piu grandi in questa cartella
-? --model openai/gpt-5.2 come annullo l'ultimo commit
-? -- come uso find con il flag --name
+? how do I find the largest files in this directory
+? --model openai/gpt-5.2 how do I undo the last commit
+? -- how do I use find with the --name flag
 ```
 
-Il modello predefinito e' `openrouter/auto`. Puoi cambiarlo con `OPENROUTER_MODEL` o con `--model`.
+The default model is `openrouter/auto`. You can change it using the `OPENROUTER_MODEL` environment variable or with the `--model` flag.
