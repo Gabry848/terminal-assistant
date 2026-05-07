@@ -1,8 +1,13 @@
 import { arch, platform, release, type } from "node:os";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import clipboardy from "clipboardy";
 
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = "openrouter/auto";
 const VERSION = "1.0.0";
+const HISTORY_FILE = join(process.env.HOME || process.env.USERPROFILE || "", ".terminal-assistant-history.json");
+
 const ansi = {
   yellow: (value: string) => `\x1b[33m${value}\x1b[39m`,
   bold: (value: string) => `\x1b[1m${value}\x1b[22m`,
@@ -14,6 +19,9 @@ type CliOptions = {
   model: string;
   stream: boolean;
   query: string;
+  copy: boolean;
+  raw: boolean;
+  followUp: boolean;
 };
 
 type OpenRouterChunk = {
@@ -27,10 +35,28 @@ type OpenRouterChunk = {
   }>;
 };
 
+type Message = { role: string; content: string };
+
+async function readStdin(): Promise<string> {
+  if (process.stdin.isTTY) {
+    return "";
+  }
+  let result = "";
+  for await (const chunk of process.stdin) {
+    result += chunk;
+  }
+  return result;
+}
+
 export async function main(argv: string[]): Promise<void> {
   const options = parseArgs(argv);
 
-  if (!options.query) {
+  const stdinContent = await readStdin();
+  if (stdinContent) {
+    options.query = options.query ? `${stdinContent}\n\n${options.query}` : stdinContent;
+  }
+
+  if (!options.query && !options.followUp) {
     printHelp();
     return;
   }
@@ -53,6 +79,9 @@ export async function main(argv: string[]): Promise<void> {
     model: options.model,
     query: options.query,
     stream: options.stream,
+    copy: options.copy,
+    raw: options.raw,
+    followUp: options.followUp,
     signal: controller.signal,
   });
 }
@@ -61,6 +90,9 @@ function parseArgs(argv: string[]): CliOptions {
   const queryParts: string[] = [];
   let model = process.env.OPENROUTER_MODEL || DEFAULT_MODEL;
   let stream = process.env.OPENROUTER_STREAM !== "false";
+  let copy = false;
+  let raw = false;
+  let followUp = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -85,6 +117,22 @@ function parseArgs(argv: string[]): CliOptions {
       continue;
     }
 
+    if (arg === "--copy" || arg === "-c") {
+      copy = true;
+      continue;
+    }
+    
+    if (arg === "--raw") {
+      raw = true;
+      stream = false;
+      continue;
+    }
+
+    if (arg === "--follow-up" || arg === "-f") {
+      followUp = true;
+      continue;
+    }
+
     if (arg === "--model" || arg === "-m") {
       const next = argv[index + 1];
       if (!next) {
@@ -101,8 +149,30 @@ function parseArgs(argv: string[]): CliOptions {
   return {
     model,
     stream,
+    copy,
+    raw,
+    followUp,
     query: queryParts.join(" ").trim(),
   };
+}
+
+function loadHistory(): Message[] {
+  if (existsSync(HISTORY_FILE)) {
+    try {
+      return JSON.parse(readFileSync(HISTORY_FILE, "utf-8"));
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function saveHistory(messages: Message[]): void {
+  try {
+    writeFileSync(HISTORY_FILE, JSON.stringify(messages, null, 2), "utf-8");
+  } catch {
+    //
+  }
 }
 
 async function askOpenRouter(input: {
@@ -110,8 +180,30 @@ async function askOpenRouter(input: {
   model: string;
   query: string;
   stream: boolean;
+  copy: boolean;
+  raw: boolean;
+  followUp: boolean;
   signal: AbortSignal;
 }): Promise<void> {
+  
+  let messages: Message[] = [];
+  
+  if (input.followUp) {
+    messages = loadHistory();
+  } else {
+    messages.push({
+      role: "system",
+      content: buildSystemPrompt(),
+    });
+  }
+
+  if (input.query) {
+    messages.push({
+      role: "user",
+      content: input.query,
+    });
+  }
+
   const response = await fetch(API_URL, {
     method: "POST",
     signal: input.signal,
@@ -126,16 +218,7 @@ async function askOpenRouter(input: {
       stream: input.stream,
       temperature: 0.2,
       max_tokens: 550,
-      messages: [
-        {
-          role: "system",
-          content: buildSystemPrompt(),
-        },
-        {
-          role: "user",
-          content: input.query,
-        },
-      ],
+      messages: messages,
     }),
   });
 
@@ -143,17 +226,56 @@ async function askOpenRouter(input: {
     throw new Error(await formatApiError(response));
   }
 
+  let fullContent = "";
+
   if (!input.stream) {
     const data = (await response.json()) as OpenRouterChunk;
     const content = data.choices?.[0]?.message?.content;
     if (!content) {
       throw new Error("OpenRouter non ha restituito contenuto.");
     }
-    await printMarkdown(content);
-    return;
+    fullContent = content;
+  } else {
+    fullContent = await streamAndCollect(response, input.raw);
   }
 
-  await printStreamAsMarkdown(response);
+  messages.push({
+    role: "assistant",
+    content: fullContent,
+  });
+  saveHistory(messages);
+
+  handlePostProcess(fullContent, input.copy, input.raw, input.stream);
+}
+
+function handlePostProcess(content: string, copy: boolean, raw: boolean, stream: boolean) {
+  const codeBlocks = extractCodeBlocks(content);
+  const codeToUse = codeBlocks.length > 0 ? codeBlocks[0] : content;
+
+  if (copy) {
+    clipboardy.writeSync(codeToUse);
+    if (!raw && !stream) {
+      console.log(ansi.italic(`\n(Comando copiato negli appunti)`));
+    }
+  }
+
+  if (raw) {
+     process.stdout.write(codeToUse + "\n");
+  } else if (!stream) {
+     process.stdout.write(`${renderTerminalMarkdown(content).trimEnd()}\n`);
+  } else if (stream && copy) {
+     console.log(ansi.italic(`\n(Comando copiato negli appunti)`));
+  }
+}
+
+function extractCodeBlocks(content: string): string[] {
+  const blocks: string[] = [];
+  const regex = /^```(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)^```/gm;
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+      blocks.push(match[1].trim());
+  }
+  return blocks;
 }
 
 function buildSystemPrompt(): string {
@@ -176,7 +298,7 @@ function getOperatingSystemName(): string {
   return `${readableName} (${platformName}, ${arch()}, release ${release()})`;
 }
 
-async function printStreamAsMarkdown(response: Response): Promise<void> {
+async function streamAndCollect(response: Response, raw: boolean): Promise<string> {
   if (!response.body) {
     throw new Error("stream non disponibile nella risposta HTTP.");
   }
@@ -184,7 +306,7 @@ async function printStreamAsMarkdown(response: Response): Promise<void> {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let content = "";
+  let fullContent = "";
 
   while (true) {
     const { done, value } = await reader.read();
@@ -200,18 +322,17 @@ async function printStreamAsMarkdown(response: Response): Promise<void> {
       const chunk = parseSseLine(line);
       const delta = chunk?.choices?.[0]?.delta?.content;
       if (delta) {
-        content += delta;
+        fullContent += delta;
+        if (!raw) {
+          process.stdout.write(delta);
+        }
       }
     }
   }
-
-  if (content) {
-    await printMarkdown(content);
+  if (!raw) {
+    process.stdout.write("\n");
   }
-}
-
-async function printMarkdown(content: string): Promise<void> {
-  process.stdout.write(`${renderTerminalMarkdown(content).trimEnd()}\n`);
+  return fullContent;
 }
 
 export function renderTerminalMarkdown(content: string): string {
@@ -219,7 +340,7 @@ export function renderTerminalMarkdown(content: string): string {
   let inCodeBlock = false;
 
   for (const rawLine of content.trim().split(/\r?\n/)) {
-    const fence = rawLine.trim().match(/^```/);
+    const fence = rawLine.trim().match(/^\s*```/);
     if (fence) {
       inCodeBlock = !inCodeBlock;
       continue;
@@ -312,6 +433,7 @@ function printHelp(): void {
   console.log(`Uso:
   ? come trovo i file piu grandi in questa cartella
   ? --model openai/gpt-5.2 come faccio un revert dell'ultimo commit
+  npm run build 2>&1 | ? analizza questo log d'errore
 
 Config:
   OPENROUTER_API_KEY   obbligatoria
@@ -319,6 +441,9 @@ Config:
 
 Opzioni:
   -m, --model <id>     scegli un modello OpenRouter
+  -c, --copy           copia il codice suggerito negli appunti
+  -f, --follow-up      continua la conversazione precedente
+  --raw                stampa solo l'ultimo comando crudo (es. per pipe/eval)
   --no-stream          stampa la risposta solo quando e' completa
   --                   tutto quello che segue viene trattato come query
   -h, --help           mostra questo aiuto
