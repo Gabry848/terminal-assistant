@@ -1,0 +1,305 @@
+const API_URL = "https://openrouter.ai/api/v1/chat/completions";
+const DEFAULT_MODEL = "openrouter/auto";
+const VERSION = "1.0.0";
+const ansi = {
+  yellow: (value: string) => `\x1b[33m${value}\x1b[39m`,
+  bold: (value: string) => `\x1b[1m${value}\x1b[22m`,
+  italic: (value: string) => `\x1b[3m${value}\x1b[23m`,
+  code: (value: string) => `\x1b[36m${value}\x1b[39m`,
+};
+
+type CliOptions = {
+  model: string;
+  stream: boolean;
+  query: string;
+};
+
+type OpenRouterChunk = {
+  choices?: Array<{
+    delta?: {
+      content?: string;
+    };
+    message?: {
+      content?: string;
+    };
+  }>;
+};
+
+export async function main(argv: string[]): Promise<void> {
+  const options = parseArgs(argv);
+
+  if (!options.query) {
+    printHelp();
+    return;
+  }
+
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "manca OPENROUTER_API_KEY. Crea un file .env o esporta la variabile nell'ambiente.",
+    );
+  }
+
+  const controller = new AbortController();
+  process.once("SIGINT", () => {
+    controller.abort();
+    process.stdout.write("\n");
+  });
+
+  await askOpenRouter({
+    apiKey,
+    model: options.model,
+    query: options.query,
+    stream: options.stream,
+    signal: controller.signal,
+  });
+}
+
+function parseArgs(argv: string[]): CliOptions {
+  const queryParts: string[] = [];
+  let model = process.env.OPENROUTER_MODEL || DEFAULT_MODEL;
+  let stream = process.env.OPENROUTER_STREAM !== "false";
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+
+    if (arg === "--") {
+      queryParts.push(...argv.slice(index + 1));
+      break;
+    }
+
+    if (arg === "--help" || arg === "-h") {
+      printHelp();
+      process.exit(0);
+    }
+
+    if (arg === "--version" || arg === "-v") {
+      console.log(VERSION);
+      process.exit(0);
+    }
+
+    if (arg === "--no-stream") {
+      stream = false;
+      continue;
+    }
+
+    if (arg === "--model" || arg === "-m") {
+      const next = argv[index + 1];
+      if (!next) {
+        throw new Error("usa --model seguito da un model id OpenRouter.");
+      }
+      model = next;
+      index += 1;
+      continue;
+    }
+
+    queryParts.push(arg);
+  }
+
+  return {
+    model,
+    stream,
+    query: queryParts.join(" ").trim(),
+  };
+}
+
+async function askOpenRouter(input: {
+  apiKey: string;
+  model: string;
+  query: string;
+  stream: boolean;
+  signal: AbortSignal;
+}): Promise<void> {
+  const response = await fetch(API_URL, {
+    method: "POST",
+    signal: input.signal,
+    headers: {
+      Authorization: `Bearer ${input.apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": process.env.OPENROUTER_SITE_URL || "https://localhost",
+      "X-Title": process.env.OPENROUTER_APP_NAME || "terminal-assistant",
+    },
+    body: JSON.stringify({
+      model: input.model,
+      stream: input.stream,
+      temperature: 0.2,
+      max_tokens: 550,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Sei un assistente CLI esperto di terminale. Rispondi in italiano e sii molto stringato. Se l'utente chiede come fare un comando, rispondi con un solo blocco di codice shell contenente il comando, poi sotto 2 o 3 righe di spiegazione pratica. Aggiungi eventuali cose da sapere o variazioni solo se davvero utili. Se l'utente chiede una spiegazione, resta entro 5 righe salvo necessita' reale. Usa poco Markdown: solo blocchi di codice per comandi, **grassetto**, *corsivo* e `inline code` quando aiutano. Non usare titoli, tabelle, introduzioni lunghe, conclusioni generiche o liste lunghe. Segnala chiaramente comandi distruttivi o dipendenti dal sistema operativo.",
+        },
+        {
+          role: "user",
+          content: input.query,
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await formatApiError(response));
+  }
+
+  if (!input.stream) {
+    const data = (await response.json()) as OpenRouterChunk;
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) {
+      throw new Error("OpenRouter non ha restituito contenuto.");
+    }
+    await printMarkdown(content);
+    return;
+  }
+
+  await printStreamAsMarkdown(response);
+}
+
+async function printStreamAsMarkdown(response: Response): Promise<void> {
+  if (!response.body) {
+    throw new Error("stream non disponibile nella risposta HTTP.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      const chunk = parseSseLine(line);
+      const delta = chunk?.choices?.[0]?.delta?.content;
+      if (delta) {
+        content += delta;
+      }
+    }
+  }
+
+  if (content) {
+    await printMarkdown(content);
+  }
+}
+
+async function printMarkdown(content: string): Promise<void> {
+  process.stdout.write(`${renderTerminalMarkdown(content).trimEnd()}\n`);
+}
+
+export function renderTerminalMarkdown(content: string): string {
+  const output: string[] = [];
+  let inCodeBlock = false;
+
+  for (const rawLine of content.trim().split(/\r?\n/)) {
+    const fence = rawLine.trim().match(/^```/);
+    if (fence) {
+      inCodeBlock = !inCodeBlock;
+      continue;
+    }
+
+    if (inCodeBlock) {
+      output.push(`    ${ansi.yellow(rawLine)}`);
+      continue;
+    }
+
+    const heading = rawLine.match(/^\s{0,3}#{1,6}\s+(.+)$/);
+    if (heading) {
+      output.push(ansi.bold(renderInlineMarkdown(heading[1])));
+      continue;
+    }
+
+    const unordered = rawLine.match(/^(\s*)[-*+]\s+(.+)$/);
+    if (unordered) {
+      output.push(`${unordered[1]}* ${renderInlineMarkdown(unordered[2])}`);
+      continue;
+    }
+
+    const ordered = rawLine.match(/^(\s*)\d+[.)]\s+(.+)$/);
+    if (ordered) {
+      output.push(`${ordered[1]}1. ${renderInlineMarkdown(ordered[2])}`);
+      continue;
+    }
+
+    output.push(renderInlineMarkdown(rawLine));
+  }
+
+  return output.join("\n");
+}
+
+function renderInlineMarkdown(value: string): string {
+  const codeSpans: string[] = [];
+  const withPlaceholders = value.replace(/`([^`]+)`/g, (_match, code: string) => {
+    const index = codeSpans.push(ansi.code(code)) - 1;
+    return `\u0000CODE_${index}\u0000`;
+  });
+
+  const styled = withPlaceholders
+    .replace(/\*\*(.+?)\*\*/g, (_match, text: string) => ansi.bold(text))
+    .replace(/__(.+?)__/g, (_match, text: string) => ansi.bold(text))
+    .replace(/(^|[^\w*])\*(?!\s)([^*]+?)(?<!\s)\*/g, (_match, prefix: string, text: string) => {
+      return `${prefix}${ansi.italic(text)}`;
+    })
+    .replace(/(^|[^\w_])_(?!\s)([^_]+?)(?<!\s)_/g, (_match, prefix: string, text: string) => {
+      return `${prefix}${ansi.italic(text)}`;
+    });
+
+  return styled.replace(/\u0000CODE_(\d+)\u0000/g, (_match, index: string) => {
+    return codeSpans[Number(index)] || "";
+  });
+}
+
+function parseSseLine(line: string): OpenRouterChunk | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("data:")) {
+    return null;
+  }
+
+  const data = trimmed.slice("data:".length).trim();
+  if (!data || data === "[DONE]") {
+    return null;
+  }
+
+  try {
+    return JSON.parse(data) as OpenRouterChunk;
+  } catch {
+    return null;
+  }
+}
+
+async function formatApiError(response: Response): Promise<string> {
+  const body = await response.text();
+  if (!body) {
+    return `OpenRouter ha risposto con HTTP ${response.status}.`;
+  }
+
+  try {
+    const parsed = JSON.parse(body) as { error?: { message?: string } };
+    return parsed.error?.message || `OpenRouter ha risposto con HTTP ${response.status}.`;
+  } catch {
+    return `OpenRouter ha risposto con HTTP ${response.status}: ${body}`;
+  }
+}
+
+function printHelp(): void {
+  console.log(`Uso:
+  ? come trovo i file piu grandi in questa cartella
+  ? --model openai/gpt-5.2 come faccio un revert dell'ultimo commit
+
+Config:
+  OPENROUTER_API_KEY   obbligatoria
+  OPENROUTER_MODEL     opzionale, default: ${DEFAULT_MODEL}
+
+Opzioni:
+  -m, --model <id>     scegli un modello OpenRouter
+  --no-stream          stampa la risposta solo quando e' completa
+  --                   tutto quello che segue viene trattato come query
+  -h, --help           mostra questo aiuto
+  -v, --version        mostra la versione`);
+}
