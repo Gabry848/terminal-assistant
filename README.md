@@ -5,13 +5,19 @@ CLI TypeScript che usa OpenRouter per rispondere a domande pratiche sul terminal
 ## Setup
 
 1. Crea `.env` partendo da `.env.example` e inserisci `OPENROUTER_API_KEY`.
-2. Compila e collega il comando:
+2. Installa le dipendenze:
+
+```sh
+pnpm install
+```
+
+3. Compila e collega il comando:
 
 ```sh
 pnpm run link:global
 ```
 
-3. Aggiungi l'alias al tuo shell, per esempio in `~/.zshrc`:
+4. Aggiungi l'alias al tuo shell, per esempio in `~/.zshrc`:
 
 ```sh
 alias '?'='terminal-assistant'
