@@ -25,27 +25,39 @@ alias '?'='terminal-assistant'
 
 ## Usage
 
-\`\`\`sh
-# Ask a standalone question
+
+Ask a standalone question
+```
 ? how do I find the largest files in this directory
-
-# Follow up on the previous question
+```
+Follow up on the previous question
+```
 ? -f and how do I delete them in bulk?
-
-# Copy the generated command to clipboard Automatically
+```
+Copy the generated command to clipboard Automatically
+```
 ? -c check the size of the current folder
+```
 
-# Pipe error logs into the assistant for explanation
+Pipe error logs into the assistant for explanation
+```
 npm run build 2>&1 | ? why is this failing?
+```
 
-# Generate raw command to be piped/evaluated
+Generate raw command to be piped/evaluated
+```
 eval $(? --raw extract this tar.gz file)
+```
 
-# Use a specific OpenRouter model
+Use a specific OpenRouter model
+```
 ? --model openai/gpt-5.2 how do I undo the last commit
+```
 
-# Ignore other flags
+Ignore other flags
+```
 ? -- how do I use find with the --name flag
-\`\`\`
+```
+
 
 The default model is `openrouter/auto`. You can change it using the `OPENROUTER_MODEL` environment variable or with the `--model` flag.
