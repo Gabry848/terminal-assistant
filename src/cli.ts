@@ -1,3 +1,5 @@
+import { arch, platform, release, type } from "node:os";
+
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = "openrouter/auto";
 const VERSION = "1.0.0";
@@ -127,8 +129,7 @@ async function askOpenRouter(input: {
       messages: [
         {
           role: "system",
-          content:
-            "Sei un assistente CLI esperto di terminale. Rispondi in italiano e sii molto stringato. Se l'utente chiede come fare un comando, rispondi con un solo blocco di codice shell contenente il comando, poi sotto 2 o 3 righe di spiegazione pratica. Aggiungi eventuali cose da sapere o variazioni solo se davvero utili. Se l'utente chiede una spiegazione, resta entro 5 righe salvo necessita' reale. Usa poco Markdown: solo blocchi di codice per comandi, **grassetto**, *corsivo* e `inline code` quando aiutano. Non usare titoli, tabelle, introduzioni lunghe, conclusioni generiche o liste lunghe. Segnala chiaramente comandi distruttivi o dipendenti dal sistema operativo.",
+          content: buildSystemPrompt(),
         },
         {
           role: "user",
@@ -153,6 +154,26 @@ async function askOpenRouter(input: {
   }
 
   await printStreamAsMarkdown(response);
+}
+
+function buildSystemPrompt(): string {
+  const osName = getOperatingSystemName();
+
+  return `Sei un assistente CLI esperto di terminale. Il sistema operativo dell'utente e': ${osName}. Adatta i comandi a questo sistema operativo quando possibile. Rispondi in italiano e sii molto stringato. Se l'utente chiede come fare un comando, rispondi con un solo blocco di codice shell contenente il comando, poi sotto 2 o 3 righe di spiegazione pratica. Aggiungi eventuali cose da sapere o variazioni solo se davvero utili. Se l'utente chiede una spiegazione, resta entro 5 righe salvo necessita' reale. Usa poco Markdown: solo blocchi di codice per comandi, **grassetto**, *corsivo* e \`inline code\` quando aiutano. Non usare titoli, tabelle, introduzioni lunghe, conclusioni generiche o liste lunghe. Segnala chiaramente comandi distruttivi o dipendenti dal sistema operativo.`;
+}
+
+function getOperatingSystemName(): string {
+  const platformName = platform();
+  const readableName =
+    platformName === "darwin"
+      ? "macOS"
+      : platformName === "win32"
+        ? "Windows"
+        : platformName === "linux"
+          ? "Linux"
+          : type();
+
+  return `${readableName} (${platformName}, ${arch()}, release ${release()})`;
 }
 
 async function printStreamAsMarkdown(response: Response): Promise<void> {
