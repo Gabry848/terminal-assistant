@@ -23,8 +23,19 @@ pnpm run link:global
 alias '?'='terminal-assistant'
 ```
 
-## Usage
+## Help
 
+Get help for all available commands and options:
+
+```sh
+# Any of these work:
+?
+? help
+? --help
+? -h
+```
+
+## Usage
 
 Ask a standalone question
 ```
